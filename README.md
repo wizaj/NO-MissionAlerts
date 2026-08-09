@@ -10,7 +10,8 @@ the killfeed.
 - Intercepts mission/story messages (`MissionMessages.ShowMessgeLocal`, the
   channel used by mission-scripted "show message" outcomes) and displays them
   centre-screen: bold amber text, duration scaled to text length, fade-out.
-- Keeps the game's own mission-alert sound.
+- Plays the game's own mission-alert sound every time the displayed text
+  changes.
 - **The killfeed is untouched** — kills travel a completely separate code
   path (`MessageManager` → `MessageUI.KillFeed`) that this mod never patches.
 
@@ -24,8 +25,8 @@ Written to `BepInEx/config/local.nomissionalerts.cfg` on first run.
 | General | `HideFromFeed` | `true` | `true` = move text to centre only; `false` = show in both places |
 | Style | `FontSize` | `26` | |
 | Style | `VerticalAnchor` | `0.32` | Fraction of screen height (0.5 = dead centre) |
-| Timing | `BaseSeconds` | `4` | Minimum display time |
-| Timing | `PerCharSeconds` | `0.04` | Extra time per character |
+| Timing | `BaseSeconds` | `8` | Minimum display time |
+| Timing | `PerCharSeconds` | `0.08` | Extra time per character |
 
 ## Building
 
@@ -38,4 +39,5 @@ location. Copy the resulting DLL into `BepInEx/plugins/`.
 
 ## Status
 
-v0.1.0 — untested in game.
+v0.2.0 — sound on every text change; pacing halved (durations doubled).
+v0.1.0 tested and working in game.

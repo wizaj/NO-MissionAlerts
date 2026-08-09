@@ -22,7 +22,7 @@ namespace NOMissionAlerts
     {
         public const string PluginGuid = "local.nomissionalerts";
         public const string PluginName = "Mission Alerts";
-        public const string PluginVersion = "0.1.0";
+        public const string PluginVersion = "0.2.0";
 
         internal static ManualLogSource Log;
 
@@ -57,13 +57,13 @@ namespace NOMissionAlerts
                     "(0 = top, 0.5 = dead centre).",
                     new AcceptableValueRange<float>(0f, 0.9f)));
 
-            BaseSeconds = Config.Bind("Timing", "BaseSeconds", 4f,
+            BaseSeconds = Config.Bind("Timing", "BaseSeconds", 8f,
                 new ConfigDescription("Minimum time an alert stays up.",
-                    new AcceptableValueRange<float>(1f, 20f)));
+                    new AcceptableValueRange<float>(1f, 30f)));
 
-            PerCharSeconds = Config.Bind("Timing", "PerCharSeconds", 0.04f,
+            PerCharSeconds = Config.Bind("Timing", "PerCharSeconds", 0.08f,
                 new ConfigDescription("Extra display time per character, for longer texts.",
-                    new AcceptableValueRange<float>(0f, 0.2f)));
+                    new AcceptableValueRange<float>(0f, 0.4f)));
 
             isLocalFaction = AccessTools.Method(typeof(MissionMessages), "IsLocalFaction");
             playSound = AccessTools.Method(typeof(MissionMessages), "PlaySound");
@@ -89,7 +89,7 @@ namespace NOMissionAlerts
                         $"(HideFromFeed={HideFromFeed.Value}).");
         }
 
-        private static bool ShowMessagePrefix(MissionMessages __instance, string message, bool playsound, FactionHQ filterFaction)
+        private static bool ShowMessagePrefix(string message, FactionHQ filterFaction)
         {
             if (!Enabled.Value || string.IsNullOrEmpty(message)) return true;
 
@@ -103,20 +103,33 @@ namespace NOMissionAlerts
 
                 AlertOverlay.Push(message);
 
-                if (!HideFromFeed.Value)
-                    return true; // show in both places
-
-                // We skip the original, so replicate its sound side effect.
-                // PlaySound has its own same-frame dedupe (lastPlayedFrame).
-                if (playsound && playSound != null)
-                    playSound.Invoke(__instance, null);
-
-                return false;
+                // Sound is owned by the overlay (played whenever the displayed
+                // text changes), regardless of the original playsound flag.
+                return !HideFromFeed.Value;
             }
             catch (Exception e)
             {
                 Log.LogWarning($"Alert reroute failed, deferring to the game: {e.Message}");
                 return true;
+            }
+        }
+
+        /// <summary>
+        /// Plays the game's own mission-alert sound. PlaySound is instance-level
+        /// and non-public; the singleton and its own same-frame dedupe make this
+        /// safe to call once per displayed message.
+        /// </summary>
+        internal static void PlayAlertSound()
+        {
+            try
+            {
+                MissionMessages instance = NetworkSceneSingleton<MissionMessages>.i;
+                if (instance != null && playSound != null)
+                    playSound.Invoke(instance, null);
+            }
+            catch (Exception e)
+            {
+                Log.LogWarning($"Could not play alert sound: {e.Message}");
             }
         }
     }
@@ -148,6 +161,7 @@ namespace NOMissionAlerts
                 showUntil = Time.unscaledTime
                             + Plugin.BaseSeconds.Value
                             + current.Length * Plugin.PerCharSeconds.Value;
+                Plugin.PlayAlertSound();
             }
         }
 
