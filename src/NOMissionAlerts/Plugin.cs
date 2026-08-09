@@ -1,0 +1,182 @@
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+using BepInEx;
+using BepInEx.Configuration;
+using BepInEx.Logging;
+using HarmonyLib;
+using UnityEngine;
+
+namespace NOMissionAlerts
+{
+    /// <summary>
+    /// Reroutes story/mission text to a centre-screen alert overlay.
+    ///
+    /// Mission text flows through MissionMessages.ShowMessgeLocal (game's own
+    /// typo) -> GameplayUI.GameMessage -> the small message feed box. The
+    /// killfeed is a separate channel entirely (MessageManager.RpcKillMessage
+    /// -> MessageUI.KillFeed), so intercepting here cannot affect it.
+    /// </summary>
+    [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
+    public class Plugin : BaseUnityPlugin
+    {
+        public const string PluginGuid = "local.nomissionalerts";
+        public const string PluginName = "Mission Alerts";
+        public const string PluginVersion = "0.1.0";
+
+        internal static ManualLogSource Log;
+
+        internal static ConfigEntry<bool> Enabled;
+        internal static ConfigEntry<bool> HideFromFeed;
+        internal static ConfigEntry<int> FontSize;
+        internal static ConfigEntry<float> BaseSeconds;
+        internal static ConfigEntry<float> PerCharSeconds;
+        internal static ConfigEntry<float> VerticalAnchor;
+
+        // Both are non-public on MissionMessages, hence reflection.
+        private static MethodInfo isLocalFaction;
+        private static MethodInfo playSound;
+
+        private void Awake()
+        {
+            Log = Logger;
+
+            Enabled = Config.Bind("General", "Enabled", true,
+                "Show mission/story text as a centre-screen alert.");
+
+            HideFromFeed = Config.Bind("General", "HideFromFeed", true,
+                "Remove mission text from the small message box (true = move, " +
+                "false = show in both places). Kill feed is never affected.");
+
+            FontSize = Config.Bind("Style", "FontSize", 26,
+                new ConfigDescription("Alert text size.", new AcceptableValueRange<int>(12, 60)));
+
+            VerticalAnchor = Config.Bind("Style", "VerticalAnchor", 0.32f,
+                new ConfigDescription(
+                    "Vertical position of the alert as a fraction of screen height " +
+                    "(0 = top, 0.5 = dead centre).",
+                    new AcceptableValueRange<float>(0f, 0.9f)));
+
+            BaseSeconds = Config.Bind("Timing", "BaseSeconds", 4f,
+                new ConfigDescription("Minimum time an alert stays up.",
+                    new AcceptableValueRange<float>(1f, 20f)));
+
+            PerCharSeconds = Config.Bind("Timing", "PerCharSeconds", 0.04f,
+                new ConfigDescription("Extra display time per character, for longer texts.",
+                    new AcceptableValueRange<float>(0f, 0.2f)));
+
+            isLocalFaction = AccessTools.Method(typeof(MissionMessages), "IsLocalFaction");
+            playSound = AccessTools.Method(typeof(MissionMessages), "PlaySound");
+
+            MethodInfo target = AccessTools.Method(typeof(MissionMessages), "ShowMessgeLocal");
+            if (target == null)
+            {
+                Log.LogError("MissionMessages.ShowMessgeLocal not found — mod inert. " +
+                             "The game update likely renamed it (it was a typo, after all).");
+                return;
+            }
+
+            var harmony = new Harmony(PluginGuid);
+            harmony.Patch(target, prefix: new HarmonyMethod(
+                AccessTools.Method(typeof(Plugin), nameof(ShowMessagePrefix))));
+
+            var host = new GameObject("NOMissionAlerts_Host");
+            host.hideFlags = HideFlags.HideAndDontSave;
+            DontDestroyOnLoad(host);
+            host.AddComponent<AlertOverlay>();
+
+            Log.LogInfo($"{PluginName} {PluginVersion} loaded. Mission text rerouted to centre screen " +
+                        $"(HideFromFeed={HideFromFeed.Value}).");
+        }
+
+        private static bool ShowMessagePrefix(MissionMessages __instance, string message, bool playsound, FactionHQ filterFaction)
+        {
+            if (!Enabled.Value || string.IsNullOrEmpty(message)) return true;
+
+            try
+            {
+                // Same gate the original applies first: ignore texts meant for
+                // another faction. Letting the original run preserves its
+                // behaviour exactly for those.
+                if (isLocalFaction != null && !(bool)isLocalFaction.Invoke(null, new object[] { filterFaction }))
+                    return true;
+
+                AlertOverlay.Push(message);
+
+                if (!HideFromFeed.Value)
+                    return true; // show in both places
+
+                // We skip the original, so replicate its sound side effect.
+                // PlaySound has its own same-frame dedupe (lastPlayedFrame).
+                if (playsound && playSound != null)
+                    playSound.Invoke(__instance, null);
+
+                return false;
+            }
+            catch (Exception e)
+            {
+                Log.LogWarning($"Alert reroute failed, deferring to the game: {e.Message}");
+                return true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Centre-screen alert renderer. Shows one message at a time from a queue,
+    /// duration scaled by length, fading out over the last half second.
+    /// IMGUI richText handles the basic markup (b/i/color/size) that mission
+    /// designers use in TMP strings.
+    /// </summary>
+    internal class AlertOverlay : MonoBehaviour
+    {
+        private static readonly Queue<string> Pending = new Queue<string>();
+
+        private string current;
+        private float showUntil;
+        private GUIStyle style;
+
+        public static void Push(string message) => Pending.Enqueue(message);
+
+        private void Update()
+        {
+            if (current != null && Time.unscaledTime >= showUntil)
+                current = null;
+
+            if (current == null && Pending.Count > 0)
+            {
+                current = Pending.Dequeue();
+                showUntil = Time.unscaledTime
+                            + Plugin.BaseSeconds.Value
+                            + current.Length * Plugin.PerCharSeconds.Value;
+            }
+        }
+
+        private void OnGUI()
+        {
+            if (current == null) return;
+
+            if (style == null)
+            {
+                style = new GUIStyle
+                {
+                    fontStyle = FontStyle.Bold,
+                    alignment = TextAnchor.UpperCenter,
+                    wordWrap = true,
+                    richText = true,
+                };
+            }
+            style.fontSize = Plugin.FontSize.Value;
+
+            float alpha = Mathf.Clamp01((showUntil - Time.unscaledTime) / 0.5f);
+            float width = Screen.width * 0.6f;
+            var rect = new Rect((Screen.width - width) / 2f,
+                                Screen.height * Plugin.VerticalAnchor.Value,
+                                width, Screen.height * 0.4f);
+
+            style.normal.textColor = new Color(0f, 0f, 0f, alpha);
+            GUI.Label(new Rect(rect.x + 1, rect.y + 1, rect.width, rect.height), current, style);
+            style.normal.textColor = new Color(1f, 0.85f, 0.35f, alpha);
+            GUI.Label(rect, current, style);
+        }
+    }
+}
