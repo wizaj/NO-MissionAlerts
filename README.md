@@ -27,6 +27,7 @@ Written to `BepInEx/config/local.nomissionalerts.cfg` on first run.
 | Style | `VerticalAnchor` | `0.32` | Fraction of screen height (0.5 = dead centre) |
 | Timing | `BaseSeconds` | `8` | Minimum display time |
 | Timing | `PerCharSeconds` | `0.08` | Extra time per character |
+| Timing | `CoalesceSeconds` | `1.5` | Messages arriving within this window merge into one alert |
 
 ## Building
 
@@ -39,5 +40,10 @@ location. Copy the resulting DLL into `BepInEx/plugins/`.
 
 ## Status
 
+v0.3.0 — burst coalescing: story paragraphs scripted as several back-to-back
+message outcomes (verified against the shipping assembly: each
+`ShowMessageOutcome` carries exactly one string, and nothing in the chain
+splits text) now merge into a single alert instead of stretching into
+minutes of sequential lines. Untested in game.
 v0.2.0 — sound on every text change; pacing halved (durations doubled).
 v0.1.0 tested and working in game.

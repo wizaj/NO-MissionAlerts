@@ -22,7 +22,7 @@ namespace NOMissionAlerts
     {
         public const string PluginGuid = "local.nomissionalerts";
         public const string PluginName = "Mission Alerts";
-        public const string PluginVersion = "0.2.0";
+        public const string PluginVersion = "0.3.0";
 
         internal static ManualLogSource Log;
 
@@ -31,6 +31,7 @@ namespace NOMissionAlerts
         internal static ConfigEntry<int> FontSize;
         internal static ConfigEntry<float> BaseSeconds;
         internal static ConfigEntry<float> PerCharSeconds;
+        internal static ConfigEntry<float> CoalesceSeconds;
         internal static ConfigEntry<float> VerticalAnchor;
 
         // Both are non-public on MissionMessages, hence reflection.
@@ -64,6 +65,15 @@ namespace NOMissionAlerts
             PerCharSeconds = Config.Bind("Timing", "PerCharSeconds", 0.08f,
                 new ConfigDescription("Extra display time per character, for longer texts.",
                     new AcceptableValueRange<float>(0f, 0.4f)));
+
+            CoalesceSeconds = Config.Bind("Timing", "CoalesceSeconds", 1.5f,
+                new ConfigDescription(
+                    "Messages arriving within this many seconds of the previous one are " +
+                    "merged into the same alert as extra lines. Mission designers often " +
+                    "script a story paragraph as several back-to-back message outcomes; " +
+                    "the vanilla feed shows them together, so this restores that look. " +
+                    "0 still merges same-instant bursts.",
+                    new AcceptableValueRange<float>(0f, 10f)));
 
             isLocalFaction = AccessTools.Method(typeof(MissionMessages), "IsLocalFaction");
             playSound = AccessTools.Method(typeof(MissionMessages), "PlaySound");
@@ -135,20 +145,35 @@ namespace NOMissionAlerts
     }
 
     /// <summary>
-    /// Centre-screen alert renderer. Shows one message at a time from a queue,
+    /// Centre-screen alert renderer. Shows one alert at a time from a queue,
     /// duration scaled by length, fading out over the last half second.
     /// IMGUI richText handles the basic markup (b/i/color/size) that mission
     /// designers use in TMP strings.
+    ///
+    /// Messages arriving in a burst (within CoalesceSeconds of each other) are
+    /// merged into one alert as extra lines. Mission designers script story
+    /// paragraphs as several back-to-back ShowMessage outcomes; the vanilla
+    /// feed accumulates them so they read as one paragraph, and without
+    /// merging the one-at-a-time overlay would stretch that paragraph into
+    /// minutes of sequential alerts.
     /// </summary>
     internal class AlertOverlay : MonoBehaviour
     {
-        private static readonly Queue<string> Pending = new Queue<string>();
+        private struct Entry
+        {
+            public string Text;
+            public float Arrived;
+        }
+
+        private static readonly Queue<Entry> Pending = new Queue<Entry>();
 
         private string current;
         private float showUntil;
+        private float lastMergeArrival;
         private GUIStyle style;
 
-        public static void Push(string message) => Pending.Enqueue(message);
+        public static void Push(string message) =>
+            Pending.Enqueue(new Entry { Text = message, Arrived = Time.unscaledTime });
 
         private void Update()
         {
@@ -157,11 +182,26 @@ namespace NOMissionAlerts
 
             if (current == null && Pending.Count > 0)
             {
-                current = Pending.Dequeue();
+                Entry first = Pending.Dequeue();
+                current = first.Text;
+                lastMergeArrival = first.Arrived;
                 showUntil = Time.unscaledTime
                             + Plugin.BaseSeconds.Value
-                            + current.Length * Plugin.PerCharSeconds.Value;
+                            + first.Text.Length * Plugin.PerCharSeconds.Value;
                 Plugin.PlayAlertSound();
+            }
+
+            // Fold the rest of a burst into the visible alert. Compares arrival
+            // times, not display time, so a burst queued behind a long-running
+            // earlier alert still merges once it gets its turn — while a message
+            // arriving long after the current alert started shows separately.
+            while (current != null && Pending.Count > 0
+                   && Pending.Peek().Arrived - lastMergeArrival <= Plugin.CoalesceSeconds.Value)
+            {
+                Entry next = Pending.Dequeue();
+                current += "\n" + next.Text;
+                lastMergeArrival = next.Arrived;
+                showUntil += next.Text.Length * Plugin.PerCharSeconds.Value;
             }
         }
 
