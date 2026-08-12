@@ -44,6 +44,6 @@ v0.3.0 — burst coalescing: story paragraphs scripted as several back-to-back
 message outcomes (verified against the shipping assembly: each
 `ShowMessageOutcome` carries exactly one string, and nothing in the chain
 splits text) now merge into a single alert instead of stretching into
-minutes of sequential lines. Untested in game.
+minutes of sequential lines. Tested and working in game.
 v0.2.0 — sound on every text change; pacing halved (durations doubled).
 v0.1.0 tested and working in game.
